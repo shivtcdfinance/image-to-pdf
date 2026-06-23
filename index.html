@@ -410,39 +410,47 @@ let images = []; // { id, file, dataUrl, width, height }
 let idCounter = 0;
 
 // ─── Correct Orientation ───
-// Uses the browser's built-in EXIF handling via createImageBitmap()
-// to bake correct orientation into pixel data. Works for ALL formats:
-// JPEG, HEIC/HEIF (iPhone), PNG, WebP — no custom EXIF parser needed.
-// Falls back to direct data URL on unsupported browsers.
+// The browser's <img> element respects EXIF orientation by default
+// in Chrome 87+, Safari 14+, Firefox 106+. Reading the image via
+// FileReader → Image → Canvas gives us correctly-oriented pixel
+// data for ALL formats (JPEG, HEIC, PNG, WebP) with zero custom
+// EXIF parsing. This is the most reliable cross-browser approach.
 async function getOrientedImage(file) {
   try {
-    // createImageBitmap with 'from-image' applies EXIF orientation
-    // Supported in Chrome 59+, Firefox 74+, Safari 15+, Edge 79+
-    const opts = { imageOrientation: 'from-image', premultiplyAlpha: 'none' };
-    const bitmap = await createImageBitmap(file, opts);
+    const dataUrl = await readFileAsDataURL(file);
+    const img = await loadImage(dataUrl);
     const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    // Determine best output format based on original file type
+    ctx.drawImage(img, 0, 0);
+    // Re-encode to a standard format for PDF use
     const mime = file.type === 'image/png' ? 'image/png' :
                  file.type === 'image/webp' ? 'image/webp' : 'image/jpeg';
     const quality = mime === 'image/jpeg' ? 0.95 : undefined;
     const blob = await new Promise(r => canvas.toBlob(r, mime, quality));
-    const dataUrl = await new Promise(r => {
+    const correctedUrl = await new Promise(r => {
       const fr = new FileReader();
       fr.onload = () => r(fr.result);
       fr.readAsDataURL(blob);
     });
-    return { dataUrl, width: canvas.width, height: canvas.height };
+    return { dataUrl: correctedUrl, width: canvas.width, height: canvas.height };
   } catch (e) {
-    // Fallback for older browsers — load as-is (no EXIF correction)
+    // Fallback — shouldn't happen on any modern browser
+    console.warn('Canvas fallback used:', e);
     const dataUrl = await readFileAsDataURL(file);
     const dims = await getImageDimensions(dataUrl);
     return { dataUrl, width: dims.width, height: dims.height };
   }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
 }
 
 // ─── DOM refs ───
